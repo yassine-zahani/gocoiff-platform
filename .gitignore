@@ -1,0 +1,18 @@
+# secrets
+.env
+# Java / Maven
+target/
+.idea/
+*.iml
+# Python
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+# Node / Angular
+node_modules/
+dist/
+.angular/
+# données générées
+data/generated/
+# système
+Thumbs.db
