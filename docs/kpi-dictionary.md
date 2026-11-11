@@ -1,87 +1,99 @@
 # Dictionnaire de KPI GoCoiff
 
-Source de vérité unique pour tous les chiffres de la plateforme : requêtes SQL,
+Source unique de vérité pour tous les chiffres de la plateforme : requêtes SQL,
 entrepôt de données, Power BI, dashboard Angular et assistant IA utilisent
 exactement ces définitions.
 
 ## Conventions communes
 
-- Statuts d'un rendez-vous : `CONFIRMED` (à venir), `COMPLETED`, `NO_SHOW`, `CANCELLED`.
+- Statuts d'un rendez-vous : `BOOKED` puis `CONFIRMED` (à venir), et les états finaux `COMPLETED`, `NO_SHOW`, `CANCELLED`.
+- Un rendez-vous est "honoré" quand il est `COMPLETED`.
 - Une annulation n'est jamais un no-show : la cliente annule gratuitement jusqu'à 24 h avant, le créneau est libéré.
-- Un rendez-vous est "clôturé" quand il est `COMPLETED` ou `NO_SHOW`.
-- Montants en DT, type DECIMAL. Le prix est celui enregistré sur le rendez-vous au moment de la réservation, pas le prix actuel du service.
-- Dates et heures en heure locale de Tunis. La période d'un KPI se rattache à la date du rendez-vous, pas à la date de création.
+- Montants en DT, type DECIMAL(10,3) (1 DT = 1000 millimes). Le prix utilisé est `price_tnd`, copié sur le rendez-vous à la réservation, pas le prix actuel du service.
+- Heures en heure locale de Tunis. La période d'un KPI se rattache à `start_at` (date du rendez-vous).
 - Si le dénominateur vaut 0, le KPI vaut NULL (affiché "n/d"), jamais 0.
-- Les rendez-vous sont comptés par salon. L'admin (A1) agrège sur tous les salons.
+- Les KPI se calculent par salon. L'admin (A1) agrège sur tous les salons.
+
+Exemple commun : sauf mention contraire, les exemples chiffrés utilisent ces 5 rendez-vous inventés, pour un même salon et une même journée.
+
+| Rdv | Statut | price_tnd | duration_min | booked_at puis start_at (délai) |
+|---|---|---|---|---|
+| R1 | COMPLETED | 20.000 | 30 | 48 h avant |
+| R2 | COMPLETED | 35.000 | 45 | 24 h avant |
+| R3 | COMPLETED | 30.000 | 30 | 72 h avant |
+| R4 | NO_SHOW | 25.000 | 30 | 6 h avant |
+| R5 | CANCELLED | 20.000 | 30 | 10 h avant |
+
+Minutes de travail disponibles ce jour-là (horaires des barbiers) : 600.
 
 ## 1. Chiffre d'affaires
-- Définition : somme des prix des prestations effectivement réalisées.
-- Formule : somme du prix des rendez-vous `COMPLETED` de la période.
-- Unité : DT
-- Période : jour, semaine, mois (dashboard : 14 derniers jours).
-- Source : table des rendez-vous (prix, statut, date) du salon.
-- Cas limites : les no-show et les annulations ne rapportent rien. Les rendez-vous à venir ne comptent pas (ils sont "prévus", pas encaissés).
+- Définition : argent gagné sur les prestations réalisées.
+- Formule : somme de `price_tnd` des rendez-vous `COMPLETED`.
+- Unité : DT. Période : jour, semaine, mois (dashboard : 14 derniers jours).
+- Source : `appointments` (price_tnd, status, start_at).
+- Cas limites : un rendez-vous seulement réservé ne compte pas. Les no-show et annulations ne rapportent rien.
+- Exemple : R1 + R2 + R3 = 20 + 35 + 30 = **85.000 DT**.
 
-## 2. Taux d'occupation
-- Définition : part du temps disponible des barbiers réellement réservée.
-- Formule : minutes réservées (`CONFIRMED` + `COMPLETED` + `NO_SHOW`) / minutes ouvertes (horaires du salon x barbiers actifs).
-- Unité : %
-- Période : jour, semaine, mois.
-- Source : rendez-vous (durée, statut), horaires du salon, barbiers.
-- Cas limites : un no-show occupe le créneau, donc il compte au numérateur. Un barbier désactivé ne compte plus dans les minutes ouvertes à partir de sa désactivation. Jour de fermeture : dénominateur 0, donc NULL.
+## 2. Manque à gagner
+- Définition : argent perdu à cause des no-show. KPI central du projet.
+- Formule : somme de `price_tnd` des rendez-vous `NO_SHOW`.
+- Unité : DT. Période : semaine, mois.
+- Source : `appointments`.
+- Cas limites : les annulations ne comptent pas (le créneau a pu être revendu).
+- Exemple : R4 = **25.000 DT**.
 
-## 3. Taux de no-show
-- Définition : part des rendez-vous clôturés où la cliente ne s'est pas présentée.
-- Formule : `NO_SHOW` / (`COMPLETED` + `NO_SHOW`).
-- Unité : %
-- Période : semaine, mois.
-- Source : rendez-vous (statut, date).
-- Cas limites : les `CANCELLED` sont exclus du numérateur et du dénominateur (créneau libéré, pas d'absence). Les `CONFIRMED` sont exclus (le résultat n'est pas connu). Un rendez-vous passé resté `CONFIRMED` n'est pas compté tant que le gérant ne l'a pas clôturé : c'est la raison du compteur "à marquer" de l'agenda.
-
-## 4. Taux de rétention
-- Définition : part des clientes de la période qui étaient déjà venues avant.
-- Formule : clientes ayant au moins un `COMPLETED` dans la période ET au moins un `COMPLETED` avant la période / clientes ayant au moins un `COMPLETED` dans la période.
-- Unité : %
-- Période : mois.
-- Source : rendez-vous (cliente, statut, date).
-- Cas limites : une cliente qui vient 2 fois dans la même période mais jamais avant est nouvelle, pas fidèle. Première période d'un salon : NULL.
-
-## 5. Nombre de rendez-vous
-- Définition : volume de rendez-vous pris sur la période, hors annulations.
-- Formule : nombre de rendez-vous `CONFIRMED` + `COMPLETED` + `NO_SHOW`.
-- Unité : nombre
-- Période : jour, semaine, mois.
-- Source : rendez-vous.
-- Cas limites : un rendez-vous reprogrammé est une annulation plus une nouvelle réservation, il compte une seule fois.
-
-## 6. Panier moyen
-- Définition : montant moyen d'un rendez-vous réalisé.
-- Formule : chiffre d'affaires / nombre de `COMPLETED`.
-- Unité : DT
-- Période : semaine, mois.
-- Source : rendez-vous.
+## 3. Panier moyen
+- Définition : dépense moyenne par rendez-vous honoré.
+- Formule : chiffre d'affaires ÷ nombre de `COMPLETED`.
+- Unité : DT. Période : semaine, mois.
+- Source : `appointments`.
 - Cas limites : aucun `COMPLETED` : NULL.
+- Exemple : 85 ÷ 3 = **28.333 DT**.
 
-## 7. Taux d'annulation
-- Définition : part des rendez-vous pris qui ont été annulés par la cliente.
-- Formule : `CANCELLED` / (`CONFIRMED` + `COMPLETED` + `NO_SHOW` + `CANCELLED`).
-- Unité : %
-- Période : semaine, mois.
-- Source : rendez-vous (statut, date).
-- Cas limites : seules les annulations faites dans la règle des 24 h existent dans les données (l'application refuse les autres).
+## 4. Taux de no-show
+- Définition : part des rendez-vous manqués parmi ceux qui devaient avoir lieu.
+- Formule : `NO_SHOW` ÷ (`COMPLETED` + `NO_SHOW`).
+- Unité : %. Période : semaine, mois.
+- Source : `appointments`.
+- Cas limites : annulations et rendez-vous futurs exclus du numérateur et du dénominateur. Un rendez-vous passé non clôturé n'est pas compté tant que le gérant ne l'a pas marqué (compteur "à marquer" de l'agenda).
+- Exemple : 1 ÷ (3 + 1) = **25 %**.
 
-## 8. Taux de rendez-vous à risque élevé
-- Définition : part des rendez-vous à venir dont le score de no-show est dans la catégorie `HIGH`.
-- Formule : rendez-vous `CONFIRMED` avec niveau `HIGH` / rendez-vous `CONFIRMED`.
-- Unité : %
-- Période : instantané (agenda du jour, jours à venir).
-- Source : rendez-vous (statut), scores de no-show (niveau).
-- Cas limites : rendez-vous sans score calculé : exclus du numérateur et du dénominateur. Seuils des niveaux (indicatif : LOW moins de 30, MEDIUM de 30 à 69, HIGH 70 et plus) : à figer dans `docs/ml-contract.md`.
+## 5. Taux d'annulation
+- Définition : part des rendez-vous annulés.
+- Formule : `CANCELLED` ÷ tous les rendez-vous de la période.
+- Unité : %. Période : semaine, mois.
+- Source : `appointments` (status, cancelled_at).
+- Cas limites : les annulations tardives pourront être séparées plus tard (défi du TP).
+- Exemple : 1 ÷ 5 = **20 %**.
 
-## 9. Note moyenne des avis
-- Définition : moyenne des notes laissées par les clientes après une prestation.
-- Formule : moyenne des notes (1 à 5) des avis du salon.
-- Unité : note sur 5, une décimale.
-- Période : 90 derniers jours et global.
-- Source : avis, liés à un rendez-vous `COMPLETED`.
-- Cas limites : aucun avis : NULL. Un avis n'est possible que sur un rendez-vous `COMPLETED` (story C4, priorité Should).
+## 6. Taux d'occupation
+- Définition : part du temps de travail qui est réservé.
+- Formule : minutes réservées (hors annulés) ÷ minutes des horaires de travail.
+- Unité : %. Période : jour, semaine, mois.
+- Source : `appointments` (duration_min), `working_hours`, `staff_members` actifs.
+- Cas limites : jour de fermeture : NULL. Variante "occupation réelle" : même formule avec les seuls `COMPLETED`. L'écart entre les deux vaut les no-show.
+- Exemple : réservées hors annulé = 30 + 45 + 30 + 30 = 135 min, donc 135 ÷ 600 = **22,5 %**. Occupation réelle : 105 ÷ 600 = **17,5 %**. Écart : 5 points = les 30 min du no-show R4.
+
+## 7. Rétention à 60 jours
+- Définition : part des clientes qui reviennent.
+- Formule : clientes avec un 2e rendez-vous honoré dans les 60 jours après le 1er ÷ clientes avec un 1er rendez-vous honoré dans la période.
+- Unité : %. Période : mois (cohorte).
+- Source : `appointments` (client_id, status, start_at).
+- Cas limites : demande une fenêtre de 60 jours complète après la période, sinon NULL.
+- Exemple (autre jeu) : 5 clientes ont leur 1er rendez-vous honoré en septembre. A et B reviennent dans les 60 jours, C, D et E non. Résultat : 2 ÷ 5 = **40 %**.
+
+## 8. Délai de réservation
+- Définition : avance moyenne de réservation. Variable clé du modèle.
+- Formule : moyenne de (`start_at` moins `booked_at`) en heures.
+- Unité : heures. Période : semaine, mois.
+- Source : `appointments`.
+- Cas limites : on inclut tous les statuts (le délai existe même pour une annulation).
+- Exemple : (48 + 24 + 72 + 6 + 10) ÷ 5 = 160 ÷ 5 = **32 h**.
+
+## 9. Note moyenne
+- Définition : satisfaction des clientes.
+- Formule : moyenne de `rating` (1 à 5).
+- Unité : note sur 5. Période : 90 jours et global.
+- Source : `reviews`, liés à un rendez-vous `COMPLETED`.
+- Cas limites : uniquement sur les avis déposés. Aucun avis : NULL.
+- Exemple : R1, R2, R3 laissent 5, 4 et 3. R4 et R5 n'ont pas d'avis (ils ne comptent pas). Résultat : 12 ÷ 3 = **4,0**.
